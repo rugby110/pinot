@@ -44,6 +44,10 @@ public enum BrokerMeter implements AbstractMetrics.Meter {
   // Reduce responses phase.
   RESPONSE_MERGE_EXCEPTIONS("exceptions", false),
 
+  // These metrics track the number of partial results.
+  PROCESSING_EXCEPTION_CAUGHT("exceptions", false),
+  PARTIAL_SERVERS_RESPONDED("exceptions", false),
+
   // These metrics track the cost of the query.
   DOCUMENTS_SCANNED("documents", false),
   ENTRIES_SCANNED_IN_FILTER("documents", false),
@@ -72,8 +76,7 @@ public enum BrokerMeter implements AbstractMetrics.Meter {
   // This implies that we have identified an object for which we have not implemented custom ser/de.
   DATA_TABLE_OBJECT_DESERIALIZATION("dataTableObjectDeserialization", true),
 
-  ROUTING_TABLE_REBUILD_FAILURES("failures", false),
-  ;
+  ROUTING_TABLE_REBUILD_FAILURES("failures", false);
 
   private final String brokerMeterName;
   private final String unit;

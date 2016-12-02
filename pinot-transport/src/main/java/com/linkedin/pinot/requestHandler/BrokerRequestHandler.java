@@ -440,6 +440,7 @@ public class BrokerRequestHandler {
             requestId, _brokerTimeOutMs, _brokerId);
     CompositeFuture<ServerInstance, ByteBuf> compositeFuture =
         _scatterGatherer.scatterGather(scatterRequest, scatterGatherStats, _brokerMetrics);
+    int numServersQueried = compositeFuture.getNumFutures();
 
     // Step 3: gather response from the servers.
     Map<ServerInstance, ByteBuf> responseMap;
@@ -453,6 +454,7 @@ public class BrokerRequestHandler {
       return BrokerResponseFactory.getBrokerResponseWithException(responseType,
           QueryException.getException(QueryException.BROKER_GATHER_ERROR, e));
     }
+    int numServersResponded = responseMap.size();
     _brokerMetrics.addPhaseTiming(tableName, BrokerQueryPhase.SCATTER_GATHER, System.nanoTime() - scatterStartTime);
 
     //Step 4: deserialize the responses.
@@ -468,8 +470,19 @@ public class BrokerRequestHandler {
     BrokerResponse brokerResponse = reduceService.reduceOnDataTable(brokerRequest, dataTableMap, _brokerMetrics);
     _brokerMetrics.addPhaseTiming(tableName, BrokerQueryPhase.REDUCE, System.nanoTime() - reduceStartTime);
 
-    // Attach processing exceptions and return.
+    // Attach processing exceptions and number of servers queried/responded.
     brokerResponse.setExceptions(processingExceptions);
+    brokerResponse.setNumServersQueried(numServersQueried);
+    brokerResponse.setNumServersResponded(numServersResponded);
+
+    // Update broker metrics.
+    if (brokerResponse.getExceptionsSize() > 0) {
+      _brokerMetrics.addMeteredTableValue(tableName, BrokerMeter.PROCESSING_EXCEPTION_CAUGHT, 1);
+    }
+    if (numServersQueried > numServersResponded) {
+      _brokerMetrics.addMeteredTableValue(tableName, BrokerMeter.PARTIAL_SERVERS_RESPONDED, 1);
+    }
+
     return brokerResponse;
   }
 
@@ -494,6 +507,7 @@ public class BrokerRequestHandler {
     ResponseType responseType = BrokerResponseFactory.getResponseType(originalBrokerRequest.getResponseFormat());
     long routingTime = 0L;
     long scatterGatherTime = 0L;
+    int numServersQueried = 0;
     Map<String, CompositeFuture<ServerInstance, ByteBuf>> compositeFutureMap = new HashMap<>(perTableRequests.size());
 
     for (BrokerRequest brokerRequest : perTableRequests) {
@@ -516,8 +530,10 @@ public class BrokerRequestHandler {
           new ScatterGatherRequestImpl(brokerRequest, segmentServices, _replicaSelection,
               ReplicaSelectionGranularity.SEGMENT_ID_SET, brokerRequest.getBucketHashKey(), 0, bucketingSelection,
               requestId, _brokerTimeOutMs, _brokerId);
-      compositeFutureMap.put(tableName,
-          _scatterGatherer.scatterGather(scatterRequest, scatterGatherStats, _brokerMetrics));
+      CompositeFuture<ServerInstance, ByteBuf> compositeFuture =
+          _scatterGatherer.scatterGather(scatterRequest, scatterGatherStats, _brokerMetrics);
+      numServersQueried += compositeFuture.getNumFutures();
+      compositeFutureMap.put(tableName, compositeFuture);
       scatterGatherTime += System.nanoTime() - scatterStartTime;
     }
     if (compositeFutureMap.isEmpty()) {
@@ -528,6 +544,7 @@ public class BrokerRequestHandler {
 
     // Step 3: gather response from the servers.
     long gatherStartTime = System.nanoTime();
+    int numServersResponded = 0;
     Map<String, Map<ServerInstance, ByteBuf>> responseMaps = new HashMap<>(compositeFutureMap.size());
     List<ProcessingException> processingExceptions = new ArrayList<>();
     for (Entry<String, CompositeFuture<ServerInstance, ByteBuf>> entry : compositeFutureMap.entrySet()) {
@@ -536,6 +553,7 @@ public class BrokerRequestHandler {
       Map<ServerInstance, ByteBuf> responseMap;
       try {
         responseMap = compositeFuture.get();
+        numServersResponded += responseMap.size();
         Map<String, Long> responseTimes = compositeFuture.getResponseTimes();
         scatterGatherStats.setResponseTimeMillis(responseTimes);
         responseMaps.put(tableName, responseMap);
@@ -572,8 +590,19 @@ public class BrokerRequestHandler {
         reduceService.reduceOnDataTable(originalBrokerRequest, dataTableMap, _brokerMetrics);
     _brokerMetrics.addPhaseTiming(originalTableName, BrokerQueryPhase.REDUCE, System.nanoTime() - reduceStartTime);
 
-    // Attach processing exceptions and return.
+    // Attach processing exceptions and number of servers queried/responded.
     brokerResponse.setExceptions(processingExceptions);
+    brokerResponse.setNumServersQueried(numServersQueried);
+    brokerResponse.setNumServersResponded(numServersResponded);
+
+    // Update broker metrics.
+    if (brokerResponse.getExceptionsSize() > 0) {
+      _brokerMetrics.addMeteredTableValue(originalTableName, BrokerMeter.PROCESSING_EXCEPTION_CAUGHT, 1);
+    }
+    if (numServersQueried > numServersResponded) {
+      _brokerMetrics.addMeteredTableValue(originalTableName, BrokerMeter.PARTIAL_SERVERS_RESPONDED, 1);
+    }
+
     return brokerResponse;
   }
 
