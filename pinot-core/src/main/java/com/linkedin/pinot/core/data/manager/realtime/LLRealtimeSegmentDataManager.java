@@ -234,8 +234,12 @@ public class LLRealtimeSegmentDataManager extends SegmentDataManager {
     }
   }
 
-  protected void consumeLoop() {
+  protected boolean consumeLoop() {
     _fieldExtractor.resetCounters();
+
+    int consecutiveErrorCount = 0;
+    final int MAX_CONSECUTIVE_ERROR_COUNT = 5;
+    boolean successful = true;
 
     final long _endOffset = Long.MAX_VALUE; // No upper limit on Kafka offset
     segmentLogger.info("Starting consumption loop start offset {}, finalOffset {}", _currentOffset, _finalOffset);
@@ -252,6 +256,19 @@ public class LLRealtimeSegmentDataManager extends SegmentDataManager {
       } catch (TimeoutException e) {
         segmentLogger.warn("Timed out when fetching messages from Kafka, retrying");
         continue;
+      } catch (SimpleConsumerWrapper.TransientConsumerException e) {
+        consecutiveErrorCount++;
+
+        if (consecutiveErrorCount < MAX_CONSECUTIVE_ERROR_COUNT) {
+          successful = false;
+          break;
+        } else {
+          Uninterruptibles.sleepUninterruptibly(1, TimeUnit.SECONDS);
+          continue;
+        }
+      } catch (SimpleConsumerWrapper.PermanentConsumerException e) {
+        successful = false;
+        break;
       }
 
       Iterator<MessageAndOffset> msgIterator = messagesAndOffsets.iterator();
@@ -312,6 +329,8 @@ public class LLRealtimeSegmentDataManager extends SegmentDataManager {
         // Kafka broker
         Uninterruptibles.sleepUninterruptibly(100, TimeUnit.MILLISECONDS);
       }
+
+      consecutiveErrorCount = 0;
     }
 
     _serverMetrics.addMeteredTableValue(_metricKeyName, ServerMeter.ROWS_WITH_ERRORS,
@@ -322,6 +341,8 @@ public class LLRealtimeSegmentDataManager extends SegmentDataManager {
         (long) _fieldExtractor.getTotalNulls());
     _serverMetrics.addMeteredTableValue(_metricKeyName, ServerMeter.COLUMNS_WITH_NULL_VALUES,
         (long) _fieldExtractor.getTotalNullCols());
+
+    return successful;
   }
 
   public class PartitionConsumer implements Runnable {
